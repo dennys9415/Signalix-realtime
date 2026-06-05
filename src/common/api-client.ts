@@ -2,9 +2,12 @@ import { config } from '../config/config';
 import type {
   ApiResponse,
   ChatDTO,
+  DeleteMessageForEveryoneResponse,
+  EditMessageResponse,
   ExactUsernameLookupResponse,
   MessageStatusDTO,
   PresenceDTO,
+  ReactionResponse,
   SendMessageResponse,
 } from '@signalix/contracts';
 import { MessageStatus, MessageType, PresenceStatus } from '@signalix/contracts';
@@ -39,8 +42,10 @@ export function sendMessage(
     chatId?: string;
     recipientUsername?: string;
     ciphertext: string;
-    messageType: MessageType.TEXT;
+    messageType: MessageType.TEXT | MessageType.IMAGE | MessageType.FILE;
     tempId?: string;
+    replyToMessageId?: string;
+    isForwarded?: boolean;
   },
 ): Promise<SendMessageResponse> {
   return call<SendMessageResponse>('POST', '/api/v1/messages/send', accessToken, payload);
@@ -72,6 +77,17 @@ export function getUserChats(
   return call<{ chats: ChatDTO[] }>('GET', '/api/v1/chats', accessToken);
 }
 
+export function deleteMessageForEveryone(
+  accessToken: string,
+  messageId: string,
+): Promise<DeleteMessageForEveryoneResponse> {
+  return call<DeleteMessageForEveryoneResponse>(
+    'POST',
+    `/api/v1/messages/${messageId}/delete-for-everyone`,
+    accessToken,
+  );
+}
+
 export function lookupUser(
   accessToken: string,
   username: string,
@@ -79,6 +95,43 @@ export function lookupUser(
   return call<ExactUsernameLookupResponse>(
     'GET',
     `/api/v1/users/lookup/${encodeURIComponent(username)}`,
+    accessToken,
+  );
+}
+
+export function editMessage(
+  accessToken: string,
+  messageId: string,
+  ciphertext: string,
+): Promise<EditMessageResponse> {
+  return call<EditMessageResponse>(
+    'PATCH',
+    `/api/v1/messages/${messageId}`,
+    accessToken,
+    { ciphertext },
+  );
+}
+
+export function setReaction(
+  accessToken: string,
+  messageId: string,
+  emoji: string,
+): Promise<ReactionResponse> {
+  return call<ReactionResponse>(
+    'POST',
+    `/api/v1/messages/${messageId}/reaction`,
+    accessToken,
+    { emoji },
+  );
+}
+
+export function removeReaction(
+  accessToken: string,
+  messageId: string,
+): Promise<ReactionResponse> {
+  return call<ReactionResponse>(
+    'DELETE',
+    `/api/v1/messages/${messageId}/reaction`,
     accessToken,
   );
 }

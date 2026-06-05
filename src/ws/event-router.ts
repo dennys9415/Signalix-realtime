@@ -8,10 +8,18 @@ import {
   PresenceStatus,
 } from '@signalix/contracts';
 import type {
+  ClientMessageDeleteForEveryonePayload,
+  ClientMessageEditPayload,
+  ClientMessageReactionRemovePayload,
+  ClientMessageReactionSetPayload,
   ClientMessageSendPayload,
   MessageStatusPayload,
+  ServerMessageDeletedForEveryonePayload,
+  ServerMessageEditedPayload,
   ServerMessageNewPayload,
+  ServerMessageReactionUpdatedPayload,
   ServerMessageSentPayload,
+  TypingPayload,
   WsAuthenticatePayload,
   WsAuthenticatedPayload,
   WsErrorPayload,
@@ -25,6 +33,10 @@ import * as presence from '../presence/presence.service';
 import { send, parseMessage } from '../common/ws-helpers';
 
 const AUTH_TIMEOUT_MS = 30_000;
+const TYPING_EXPIRE_MS = 5_000;
+
+// Key: `${userId}:${chatId}` — auto-fires server.typing.stop when client misses the stop event
+const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function sendError(ws: WebSocket, code: ErrorCode, message: string): void {
   const payload: WsErrorPayload = {
@@ -165,6 +177,24 @@ async function routeEvent(conn: Connection, event: string, payload: unknown): Pr
         MessageStatus.READ,
       );
       break;
+    case ClientEvent.MESSAGE_DELETE_FOR_EVERYONE:
+      await onMessageDeleteForEveryone(conn, payload as Partial<ClientMessageDeleteForEveryonePayload>);
+      break;
+    case ClientEvent.MESSAGE_EDIT:
+      await onMessageEdit(conn, payload as Partial<ClientMessageEditPayload>);
+      break;
+    case ClientEvent.MESSAGE_REACTION_SET:
+      await onMessageReactionSet(conn, payload as Partial<ClientMessageReactionSetPayload>);
+      break;
+    case ClientEvent.MESSAGE_REACTION_REMOVE:
+      await onMessageReactionRemove(conn, payload as Partial<ClientMessageReactionRemovePayload>);
+      break;
+    case ClientEvent.TYPING_START:
+      onTypingStart(conn, payload as Partial<TypingPayload>);
+      break;
+    case ClientEvent.TYPING_STOP:
+      onTypingStop(conn, payload as Partial<TypingPayload>);
+      break;
     case ClientEvent.HEARTBEAT:
       onHeartbeat(conn, payload as Partial<WsHeartbeatPayload>);
       break;
@@ -207,8 +237,10 @@ async function onMessageSend(
       chatId: payload.chatId,
       recipientUsername: payload.recipientUsername,
       ciphertext: payload.ciphertext,
-      messageType: MessageType.TEXT,
+      messageType: payload.messageType ?? MessageType.TEXT,
       tempId: payload.tempId,
+      replyToMessageId: payload.replyToMessageId,
+      isForwarded: payload.isForwarded,
     });
   } catch (err) {
     sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
@@ -228,6 +260,7 @@ async function onMessageSend(
     senderId: conn.userId,
     ...(tempId ? { tempId } : {}),
     timestamp: message.createdAt,
+    ...(message.linkPreview && { linkPreview: message.linkPreview }),
   };
   send(conn.ws, ServerEvent.MESSAGE_SENT, sentPayload);
 
@@ -239,6 +272,9 @@ async function onMessageSend(
     ciphertext: message.ciphertext,
     messageType: message.messageType,
     timestamp: message.createdAt,
+    ...(message.replyTo && { replyTo: message.replyTo }),
+    ...(message.isForwarded && { isForwarded: true }),
+    ...(message.linkPreview && { linkPreview: message.linkPreview }),
   };
 
   for (const participantId of cm.getChatParticipants(chatId)) {
@@ -292,11 +328,217 @@ async function onMessageStatus(
   }
 }
 
+async function onMessageDeleteForEveryone(
+  conn: Connection,
+  payload: Partial<ClientMessageDeleteForEveryonePayload>,
+): Promise<void> {
+  if (!payload.messageId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'messageId is required');
+    return;
+  }
+  if (!payload.chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+
+  let result;
+  try {
+    result = await api.deleteMessageForEveryone(conn.accessToken, payload.messageId);
+  } catch (err) {
+    sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+    return;
+  }
+
+  const broadcast: ServerMessageDeletedForEveryonePayload = {
+    messageId: result.messageId,
+    chatId: result.chatId,
+    deletedAt: result.deletedAt,
+  };
+
+  // Broadcast to all participants in the chat (including sender's other devices)
+  for (const participantId of cm.getChatParticipants(payload.chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      // Skip the sending device — it already applied an optimistic update
+      if (participantConn.deviceId === conn.deviceId) continue;
+      send(participantConn.ws, ServerEvent.MESSAGE_DELETED_FOR_EVERYONE, broadcast);
+    }
+  }
+}
+
 function onHeartbeat(conn: Connection, payload: Partial<WsHeartbeatPayload>): void {
   const ackPayload: WsHeartbeatPayload = {
     timestamp: payload.timestamp ?? new Date().toISOString(),
   };
   send(conn.ws, ServerEvent.HEARTBEAT_ACK, ackPayload);
+}
+
+async function onMessageEdit(
+  conn: Connection,
+  payload: Partial<ClientMessageEditPayload>,
+): Promise<void> {
+  if (!payload.messageId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'messageId is required');
+    return;
+  }
+  if (!payload.chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+  if (!payload.ciphertext) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'ciphertext is required');
+    return;
+  }
+
+  let result;
+  try {
+    result = await api.editMessage(conn.accessToken, payload.messageId, payload.ciphertext);
+  } catch (err) {
+    sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+    return;
+  }
+
+  const broadcast: ServerMessageEditedPayload = {
+    messageId: result.messageId,
+    chatId: result.chatId,
+    ciphertext: result.ciphertext,
+    editedAt: result.editedAt,
+  };
+
+  // Broadcast to all participants (including sender's other devices; skip sending device)
+  for (const participantId of cm.getChatParticipants(payload.chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      if (participantConn.deviceId === conn.deviceId) continue;
+      send(participantConn.ws, ServerEvent.MESSAGE_EDITED, broadcast);
+    }
+  }
+}
+
+async function onMessageReactionSet(
+  conn: Connection,
+  payload: Partial<ClientMessageReactionSetPayload>,
+): Promise<void> {
+  if (!payload.messageId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'messageId is required');
+    return;
+  }
+  if (!payload.chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+  if (!payload.emoji) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'emoji is required');
+    return;
+  }
+
+  let result;
+  try {
+    result = await api.setReaction(conn.accessToken, payload.messageId, payload.emoji);
+  } catch (err) {
+    sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+    return;
+  }
+
+  const broadcast: ServerMessageReactionUpdatedPayload = {
+    messageId: result.messageId,
+    chatId: result.chatId,
+    reactions: result.reactions,
+  };
+
+  for (const participantId of cm.getChatParticipants(payload.chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      send(participantConn.ws, ServerEvent.MESSAGE_REACTION_UPDATED, broadcast);
+    }
+  }
+}
+
+async function onMessageReactionRemove(
+  conn: Connection,
+  payload: Partial<ClientMessageReactionRemovePayload>,
+): Promise<void> {
+  if (!payload.messageId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'messageId is required');
+    return;
+  }
+  if (!payload.chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+
+  let result;
+  try {
+    result = await api.removeReaction(conn.accessToken, payload.messageId);
+  } catch (err) {
+    sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+    return;
+  }
+
+  const broadcast: ServerMessageReactionUpdatedPayload = {
+    messageId: result.messageId,
+    chatId: result.chatId,
+    reactions: result.reactions,
+  };
+
+  for (const participantId of cm.getChatParticipants(payload.chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      send(participantConn.ws, ServerEvent.MESSAGE_REACTION_UPDATED, broadcast);
+    }
+  }
+}
+
+function onTypingStart(conn: Connection, payload: Partial<TypingPayload>): void {
+  const chatId = payload?.chatId;
+  if (!chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+
+  const key = `${conn.userId}:${chatId}`;
+  const existing = typingTimers.get(key);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    typingTimers.delete(key);
+    const stopPayload: TypingPayload = { chatId, userId: conn.userId, timestamp: new Date().toISOString() };
+    for (const participantId of cm.getChatParticipants(chatId)) {
+      for (const participantConn of cm.getByUserId(participantId)) {
+        if (participantConn.deviceId === conn.deviceId) continue;
+        send(participantConn.ws, ServerEvent.TYPING_STOP, stopPayload);
+      }
+    }
+  }, TYPING_EXPIRE_MS);
+
+  typingTimers.set(key, timer);
+
+  const startPayload: TypingPayload = { chatId, userId: conn.userId, timestamp: new Date().toISOString() };
+  for (const participantId of cm.getChatParticipants(chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      if (participantConn.deviceId === conn.deviceId) continue;
+      send(participantConn.ws, ServerEvent.TYPING_START, startPayload);
+    }
+  }
+}
+
+function onTypingStop(conn: Connection, payload: Partial<TypingPayload>): void {
+  const chatId = payload?.chatId;
+  if (!chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+
+  const key = `${conn.userId}:${chatId}`;
+  const existing = typingTimers.get(key);
+  if (existing) {
+    clearTimeout(existing);
+    typingTimers.delete(key);
+  }
+
+  const stopPayload: TypingPayload = { chatId, userId: conn.userId, timestamp: new Date().toISOString() };
+  for (const participantId of cm.getChatParticipants(chatId)) {
+    for (const participantConn of cm.getByUserId(participantId)) {
+      if (participantConn.deviceId === conn.deviceId) continue;
+      send(participantConn.ws, ServerEvent.TYPING_STOP, stopPayload);
+    }
+  }
 }
 
 async function onPresenceUpdate(
