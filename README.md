@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.7.0**
+**Version: v0.7.1**
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
