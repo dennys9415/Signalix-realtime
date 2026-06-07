@@ -1,8 +1,8 @@
 # Signalix Realtime
 
-**Version: v0.8.0**
+**Version: v0.9.0**
 
-> v0.8.0 didn't touch this service. The new encryption-envelope fields on `client.message.send` / `server.message.new` are additive optional properties already covered by `Signalix-contracts`; the WS layer forwards them unchanged. No new events, no env vars, no protocol break for v0.7.x clients.
+> v0.9.0 turns on real beta E2EE for direct text messages. The WS protocol is unchanged — the envelope fields on `client.message.send` / `server.message.new` (defined since v0.8.0) are now actually populated with X25519 / AES-GCM material. **The event-router now forwards these envelope fields end-to-end** (it didn't initially in v0.9.0's first cut — see the "Fixed" entry in the changelog). v0.7.x clients keep working: they just see opaque ciphertext for direct text from v0.9.0+ peers, with no protocol error.
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -165,6 +165,17 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.9.0 changelog — Signal Protocol Beta
+
+### Fixed (post-initial-cut)
+- **`event-router.onMessageSend` now forwards the encryption envelope fields end-to-end.** The first cut of v0.9.0 missed two lines:
+  - `api.sendMessage(...)` call didn't extract `payload.{encryptionVersion, senderDeviceId, recipientDeviceId, preKeyId, signedPreKeyId}` from the incoming WS frame → the API persisted rows with `encryption_version = 0` and the envelope columns NULL, defeating decryption.
+  - `ServerMessageNewPayload` construction didn't spread the same fields from the API's returned `MessageDTO` → recipients received the JSON envelope as raw ciphertext without the `encryptionVersion >= 1` flag that triggers the client decrypt path, so the chat UI rendered `{"v":1,"c":"…","iv":"…","eph":"…"}` verbatim.
+- **`common/api-client.sendMessage` payload type widened** with the five optional envelope fields so the typecheck-supported wire shape now matches what event-router forwards.
+
+### Not changed
+- The realtime service is otherwise untouched. v0.9.0 turns on real E2EE for direct text messages, but the WS protocol is identical to v0.8.0 — the encryption envelope fields on `client.message.send` and `server.message.new` are populated with real values by the v0.9.0 frontend; the WS layer forwards them. v0.7.x / v0.8.0 clients keep working (they'll see opaque ciphertext for direct text from v0.9.0+ peers, but no protocol error).
 
 ## v0.8.0 changelog
 

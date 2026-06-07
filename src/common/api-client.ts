@@ -47,6 +47,13 @@ export function sendMessage(
     tempId?: string;
     replyToMessageId?: string;
     isForwarded?: boolean;
+    // v0.8.0 encryption envelope. Optional and forwarded through to the
+    // API as-is (the API persists them on the messages row).
+    encryptionVersion?: number;
+    senderDeviceId?: string;
+    recipientDeviceId?: string;
+    preKeyId?: number;
+    signedPreKeyId?: number;
   },
 ): Promise<SendMessageResponse> {
   return call<SendMessageResponse>('POST', '/api/v1/messages/send', accessToken, payload);

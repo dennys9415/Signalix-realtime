@@ -241,6 +241,16 @@ async function onMessageSend(
       tempId: payload.tempId,
       replyToMessageId: payload.replyToMessageId,
       isForwarded: payload.isForwarded,
+      // v0.9.0 E2EE beta — forward the encryption envelope to the API
+      // exactly as the sender posted it. The API persists these onto the
+      // messages row; without this forwarding the column defaults
+      // (`encryption_version = 0`, others NULL) would silently strip the
+      // envelope and recipients would see the raw JSON ciphertext.
+      encryptionVersion: payload.encryptionVersion,
+      senderDeviceId: payload.senderDeviceId,
+      recipientDeviceId: payload.recipientDeviceId,
+      preKeyId: payload.preKeyId,
+      signedPreKeyId: payload.signedPreKeyId,
     });
   } catch (err) {
     sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
@@ -264,7 +274,10 @@ async function onMessageSend(
   };
   send(conn.ws, ServerEvent.MESSAGE_SENT, sentPayload);
 
-  // Broadcast new message to all chat participants except the sending device
+  // Broadcast new message to all chat participants except the sending device.
+  // Envelope fields are spread when present so the recipient can decrypt:
+  // without these, the client would see the raw JSON envelope as the
+  // message body and never invoke the decrypt path.
   const newPayload: ServerMessageNewPayload = {
     messageId: message.id,
     chatId,
@@ -275,6 +288,11 @@ async function onMessageSend(
     ...(message.replyTo && { replyTo: message.replyTo }),
     ...(message.isForwarded && { isForwarded: true }),
     ...(message.linkPreview && { linkPreview: message.linkPreview }),
+    ...(message.encryptionVersion !== undefined && { encryptionVersion: message.encryptionVersion }),
+    ...(message.senderDeviceId !== undefined && { senderDeviceId: message.senderDeviceId }),
+    ...(message.recipientDeviceId !== undefined && { recipientDeviceId: message.recipientDeviceId }),
+    ...(message.preKeyId !== undefined && { preKeyId: message.preKeyId }),
+    ...(message.signedPreKeyId !== undefined && { signedPreKeyId: message.signedPreKeyId }),
   };
 
   for (const participantId of cm.getChatParticipants(chatId)) {
