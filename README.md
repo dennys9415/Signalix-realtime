@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.6.1**
+**Version: v0.7.0**
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -163,6 +163,11 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.7.0 changelog
+
+### Not changed
+- Group improvements (avatar, description, transfer ownership) are entirely REST-driven and persisted by `Signalix-api`. The realtime service is untouched — no new events, no payload changes.
 
 ## v0.6.1 changelog
 
