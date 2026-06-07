@@ -1,6 +1,8 @@
 # Signalix Realtime
 
-**Version: v0.7.1**
+**Version: v0.8.0**
+
+> v0.8.0 didn't touch this service. The new encryption-envelope fields on `client.message.send` / `server.message.new` are additive optional properties already covered by `Signalix-contracts`; the WS layer forwards them unchanged. No new events, no env vars, no protocol break for v0.7.x clients.
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -163,6 +165,16 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.8.0 changelog
+
+### Not changed
+- The realtime service is untouched. v0.8.0's encryption foundation lives entirely in the REST API + frontend. The new optional envelope fields on `client.message.send` / `server.message.new` are additive properties on the existing payloads (already contracts-defined since v0.8.0); the WS layer just forwards them. No new events, no new env vars, no protocol break for v0.7.x clients.
+
+## v0.7.1 changelog
+
+### Not changed
+- v0.7.1 search work is REST-only (`/messages/search`, `/chats/:chatId/search`). No realtime change.
 
 ## v0.7.0 changelog
 
