@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.5.0**
+**Version: v0.6.1**
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -163,6 +163,19 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.6.1 changelog
+
+### Fixed
+- **`common/api-client.ts`** — `sendMessage()` payload typing was hard-coded to `MessageType.TEXT | MessageType.IMAGE | MessageType.FILE`. AUDIO messages from the frontend would type-error here in strict mode (or be silently coerced). Replaced with the new `SendableMessageType` alias from contracts so voice notes round-trip through realtime → API without an extra mapping step.
+
+### Not changed
+- Connection routing, presence broadcasts and event-router behaviour are untouched. AUDIO follows the same `client.message.send → POST /messages/send → server.message.new` path as every other message type.
+
+## v0.6.0 changelog
+
+### Not changed
+- The realtime service stayed identical for the PWA + Web Push work — push dispatch lives in the API (it queries `presence.status` post-persist), not in the WS layer. No new events, no new payloads, no new env vars.
 
 ## v0.5.0 changelog
 

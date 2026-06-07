@@ -8,6 +8,7 @@ import type {
   MessageStatusDTO,
   PresenceDTO,
   ReactionResponse,
+  SendableMessageType,
   SendMessageResponse,
 } from '@signalix/contracts';
 import { MessageStatus, MessageType, PresenceStatus } from '@signalix/contracts';
@@ -42,7 +43,7 @@ export function sendMessage(
     chatId?: string;
     recipientUsername?: string;
     ciphertext: string;
-    messageType: MessageType.TEXT | MessageType.IMAGE | MessageType.FILE;
+    messageType: SendableMessageType;
     tempId?: string;
     replyToMessageId?: string;
     isForwarded?: boolean;
