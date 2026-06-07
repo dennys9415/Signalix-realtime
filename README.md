@@ -1,8 +1,8 @@
 # Signalix Realtime
 
-**Version: v0.9.0**
+**Version: v0.9.1**
 
-> v0.9.0 turns on real beta E2EE for direct text messages. The WS protocol is unchanged — the envelope fields on `client.message.send` / `server.message.new` (defined since v0.8.0) are now actually populated with X25519 / AES-GCM material. **The event-router now forwards these envelope fields end-to-end** (it didn't initially in v0.9.0's first cut — see the "Fixed" entry in the changelog). v0.7.x clients keep working: they just see opaque ciphertext for direct text from v0.9.0+ peers, with no protocol error.
+> v0.9.1 is a **realtime no-op release**. The hardening landed entirely in `Signalix-api` (server-side Ed25519 signature verification + byte-length checks) and `Signalix-frontend` (bundle validation, one-time pre-key consumption, device reset detection, decrypt failure cache, safety-number foundation). The WS protocol, event-router, and api-client payload shapes are identical to v0.9.0. v0.7.x / v0.8.0 clients keep working unchanged.
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -165,6 +165,12 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.9.1 changelog — E2EE hardening
+
+### Not changed
+- The realtime service is untouched in v0.9.1. All E2EE-hardening work lives in `Signalix-api` (signature verification, byte-length checks) and `Signalix-frontend` (bundle validation, one-time pre-key consumption, reset detection, decrypt failure cache, safety-number foundation). The WS protocol, event-router code, and `common/api-client` payload types are byte-for-byte identical to v0.9.0.
+- No new env vars, no new events, no payload changes, no infra changes.
 
 ## v0.9.0 changelog — Signal Protocol Beta
 
