@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.10.1**
+**Version: v0.11.0**
 
 > v0.10.0 turns on **per-recipient broadcast** for group encrypted text messages. `event-router.onMessageSend` and `onMessageEdit` now read `recipientPayloads` off the API response and deliver each participant only their own ciphertext + envelope; non-recipients get the empty sentinel and render the failure placeholder. Direct E2EE flow is unchanged. The WS protocol is additive — `recipients?` is optional on `client.message.send` and `client.message.edit`; older clients keep working.
 
@@ -165,6 +165,12 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.11.0 changelog — Media / file / voice E2EE beta (realtime no-op)
+
+### Not changed
+- v0.11.0 lands entirely in `Signalix-frontend` (encrypt-then-upload + render-side decrypt) and `Signalix-api` (`POST /media/encrypted-blob` + lifted TEXT-only guard on `recipients[]`). The realtime layer's per-device fan-out already handles IMAGE / FILE / AUDIO unchanged — the wire shape is identical to v0.10.x text messages, only the metadata inside the encrypted envelope shifted.
+- No new events, no new payload fields, no env var changes.
 
 ## v0.10.1 changelog — Per-device routing + chat-created broadcast
 
