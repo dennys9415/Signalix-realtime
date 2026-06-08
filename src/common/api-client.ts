@@ -5,6 +5,7 @@ import type {
   DeleteMessageForEveryoneResponse,
   EditMessageResponse,
   ExactUsernameLookupResponse,
+  GroupRecipientPayloadDTO,
   MessageStatusDTO,
   PresenceDTO,
   ReactionResponse,
@@ -54,6 +55,8 @@ export function sendMessage(
     recipientDeviceId?: string;
     preKeyId?: number;
     signedPreKeyId?: number;
+    // v0.10.0 — per-recipient encrypted payloads for group E2EE text sends.
+    recipients?: GroupRecipientPayloadDTO[];
   },
 ): Promise<SendMessageResponse> {
   return call<SendMessageResponse>('POST', '/api/v1/messages/send', accessToken, payload);
@@ -85,6 +88,18 @@ export function getUserChats(
   return call<{ chats: ChatDTO[] }>('GET', '/api/v1/chats', accessToken);
 }
 
+/**
+ * v0.10.2 — fetch a single chat by id, authorized as the JWT holder.
+ * Used by `onChatCreated` to canonicalize a `client.chat.created`
+ * trigger before fanning out `server.chat.created` to participants.
+ */
+export function getChatById(
+  accessToken: string,
+  chatId: string,
+): Promise<{ chat: ChatDTO }> {
+  return call<{ chat: ChatDTO }>('GET', `/api/v1/chats/${chatId}`, accessToken);
+}
+
 export function deleteMessageForEveryone(
   accessToken: string,
   messageId: string,
@@ -110,13 +125,23 @@ export function lookupUser(
 export function editMessage(
   accessToken: string,
   messageId: string,
-  ciphertext: string,
+  payload: {
+    ciphertext: string;
+    // v0.10.0 — envelope re-routing on edit (direct E2EE re-encrypt).
+    encryptionVersion?: number;
+    senderDeviceId?: string;
+    recipientDeviceId?: string;
+    preKeyId?: number;
+    signedPreKeyId?: number;
+    // v0.10.0 — per-recipient re-encrypted payloads for group E2EE edits.
+    recipients?: GroupRecipientPayloadDTO[];
+  },
 ): Promise<EditMessageResponse> {
   return call<EditMessageResponse>(
     'PATCH',
     `/api/v1/messages/${messageId}`,
     accessToken,
-    { ciphertext },
+    payload,
   );
 }
 

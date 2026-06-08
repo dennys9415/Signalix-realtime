@@ -1,8 +1,8 @@
 # Signalix Realtime
 
-**Version: v0.9.1**
+**Version: v0.10.1**
 
-> v0.9.1 is a **realtime no-op release**. The hardening landed entirely in `Signalix-api` (server-side Ed25519 signature verification + byte-length checks) and `Signalix-frontend` (bundle validation, one-time pre-key consumption, device reset detection, decrypt failure cache, safety-number foundation). The WS protocol, event-router, and api-client payload shapes are identical to v0.9.0. v0.7.x / v0.8.0 clients keep working unchanged.
+> v0.10.0 turns on **per-recipient broadcast** for group encrypted text messages. `event-router.onMessageSend` and `onMessageEdit` now read `recipientPayloads` off the API response and deliver each participant only their own ciphertext + envelope; non-recipients get the empty sentinel and render the failure placeholder. Direct E2EE flow is unchanged. The WS protocol is additive — `recipients?` is optional on `client.message.send` and `client.message.edit`; older clients keep working.
 
 WebSocket server for Signalix. Handles real-time message delivery, delivery/read receipts, typing indicators, reactions, edits, deletions, presence broadcasts, and heartbeat. Calls `Signalix-api` for all persistence — it never touches the database directly.
 
@@ -165,6 +165,34 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.10.1 changelog — Per-device routing + chat-created broadcast
+
+### Added
+- **`onChatCreated` handler** for `client.chat.created`. Re-fetches the canonical ChatDTO via `api.getChatById(chatId, conn.accessToken)` (which doubles as a participation check — the API throws FORBIDDEN if the caller isn't a member). Seeds `cm.learnChatParticipants` so subsequent message sends already know the routing; then fans `server.chat.created` out to every participant connection (skipping the originating device).
+- **`api-client.getChatById(accessToken, chatId)`** — typed wrapper for the new `GET /api/v1/chats/:chatId` endpoint.
+- **Per-device `recipientPayloads` lookup** in `onMessageSend` + `onMessageEdit`. The override is keyed by `participantConn.deviceId` (was `participantId`), so a recipient logged in on two browsers gets the envelope encrypted to *that* device, not last-write-wins.
+- **Dev-only `[signalix-rt] fan-out delivery` log** at each per-device send (gated by `NODE_ENV !== 'production'`).
+
+### Fixed
+- The `recipientPayloads` map used to be looked up by user id, which silently collapsed a multi-device recipient down to whichever entry the API's response builder wrote last. Now both devices receive their own envelope.
+
+### Not changed
+- No new env vars, no protocol break beyond the additive event. WS event name registry still gated through `@signalix/contracts`.
+
+## v0.10.0 changelog — Group E2EE beta
+
+### Added
+- **`event-router.onMessageSend` per-recipient broadcast.** When `result.recipientPayloads` is present (group encrypted send from the API), the router builds a personalized `server.message.new` payload per participant: each recipient gets `ciphertext + envelope` encrypted to their device; non-recipients (sender's other devices, or anyone not in the map) get the top-level row (empty sentinel for group encrypted sends).
+- **`event-router.onMessageEdit` per-recipient broadcast.** Symmetric path for edits. Accepts `payload.recipients` and forwards it + envelope fields through `api.editMessage`. Builds the per-recipient `server.message.edited` from `result.recipientPayloads`.
+- **Empty `ciphertext` accepted** when `recipients[]` is present (group encrypted body lives in the per-recipient map).
+- **`common/api-client.sendMessage`** signature widened with `recipients?: GroupRecipientPayloadDTO[]`.
+- **`common/api-client.editMessage`** now takes a payload object (was positional `ciphertext`). Forwards envelope fields + `recipients`.
+
+### Not changed
+- No new events, no new env vars, no protocol break. `recipients` is an additive optional field on existing payloads.
+- Direct E2EE flow — unchanged. The per-recipient loop falls back to the top-level message envelope when `recipientPayloads` is absent.
+- Routing cache, presence, typing, status, heartbeat, reactions, delete-for-everyone — untouched.
 
 ## v0.9.1 changelog — E2EE hardening
 

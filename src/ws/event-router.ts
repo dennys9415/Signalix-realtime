@@ -8,12 +8,14 @@ import {
   PresenceStatus,
 } from '@signalix/contracts';
 import type {
+  ClientChatCreatedPayload,
   ClientMessageDeleteForEveryonePayload,
   ClientMessageEditPayload,
   ClientMessageReactionRemovePayload,
   ClientMessageReactionSetPayload,
   ClientMessageSendPayload,
   MessageStatusPayload,
+  ServerChatCreatedPayload,
   ServerMessageDeletedForEveryonePayload,
   ServerMessageEditedPayload,
   ServerMessageNewPayload,
@@ -201,6 +203,9 @@ async function routeEvent(conn: Connection, event: string, payload: unknown): Pr
     case ClientEvent.PRESENCE_UPDATE:
       await onPresenceUpdate(conn, payload as { status?: PresenceStatus });
       break;
+    case ClientEvent.CHAT_CREATED:
+      await onChatCreated(conn, payload as Partial<ClientChatCreatedPayload>);
+      break;
     default:
       sendError(conn.ws, ErrorCode.WS_INVALID_EVENT, `Unknown event: ${event}`);
   }
@@ -210,7 +215,10 @@ async function onMessageSend(
   conn: Connection,
   payload: ClientMessageSendPayload,
 ): Promise<void> {
-  if (!payload?.ciphertext) {
+  // v0.10.0 — group E2EE sends carry the body inside `recipients[]` and
+  // the top-level `ciphertext` is an empty sentinel. Accept either form.
+  const hasRecipients = Array.isArray(payload?.recipients) && payload.recipients.length > 0;
+  if (!hasRecipients && !payload?.ciphertext) {
     sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'ciphertext is required');
     return;
   }
@@ -251,6 +259,8 @@ async function onMessageSend(
       recipientDeviceId: payload.recipientDeviceId,
       preKeyId: payload.preKeyId,
       signedPreKeyId: payload.signedPreKeyId,
+      // v0.10.0 — group E2EE per-recipient payloads.
+      recipients: payload.recipients,
     });
   } catch (err) {
     sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
@@ -278,28 +288,68 @@ async function onMessageSend(
   // Envelope fields are spread when present so the recipient can decrypt:
   // without these, the client would see the raw JSON envelope as the
   // message body and never invoke the decrypt path.
-  const newPayload: ServerMessageNewPayload = {
-    messageId: message.id,
-    chatId,
-    senderId: conn.userId,
-    ciphertext: message.ciphertext,
-    messageType: message.messageType,
-    timestamp: message.createdAt,
-    ...(message.replyTo && { replyTo: message.replyTo }),
-    ...(message.isForwarded && { isForwarded: true }),
-    ...(message.linkPreview && { linkPreview: message.linkPreview }),
-    ...(message.encryptionVersion !== undefined && { encryptionVersion: message.encryptionVersion }),
-    ...(message.senderDeviceId !== undefined && { senderDeviceId: message.senderDeviceId }),
-    ...(message.recipientDeviceId !== undefined && { recipientDeviceId: message.recipientDeviceId }),
-    ...(message.preKeyId !== undefined && { preKeyId: message.preKeyId }),
-    ...(message.signedPreKeyId !== undefined && { signedPreKeyId: message.signedPreKeyId }),
-  };
+  //
+  // v0.10.0 — fan-out encrypted sends (direct + group): `recipientPayloads`
+  // is keyed by **deviceId**, so a multi-device recipient (Brave + Chrome
+  // on the same account) receives the envelope encrypted to *that* device.
+  // Connections whose deviceId isn't in the map (sender's other devices
+  // that didn't get an envelope, or non-recipients) get the empty
+  // top-level row so they render the failure placeholder rather than the
+  // wrong ciphertext.
+  const recipientPayloads = result.recipientPayloads;
+  const hasFanout = !!recipientPayloads && Object.keys(recipientPayloads).length > 0;
 
   for (const participantId of cm.getChatParticipants(chatId)) {
     for (const participantConn of cm.getByUserId(participantId)) {
       // Skip the device that sent the message; deliver to sender's other devices
       if (participantConn.deviceId === conn.deviceId) continue;
+
+      const override = recipientPayloads?.[participantConn.deviceId];
+
+      const newPayload: ServerMessageNewPayload = {
+        messageId: message.id,
+        chatId,
+        senderId: conn.userId,
+        ciphertext: override?.ciphertext ?? message.ciphertext,
+        messageType: message.messageType,
+        timestamp: message.createdAt,
+        ...(message.replyTo && { replyTo: message.replyTo }),
+        ...(message.isForwarded && { isForwarded: true }),
+        ...(message.linkPreview && { linkPreview: message.linkPreview }),
+        ...(override
+          ? {
+              encryptionVersion: override.encryptionVersion,
+              ...(override.senderDeviceId !== undefined && { senderDeviceId: override.senderDeviceId }),
+              ...(override.recipientDeviceId !== undefined && { recipientDeviceId: override.recipientDeviceId }),
+              ...(override.preKeyId !== undefined && { preKeyId: override.preKeyId }),
+              ...(override.signedPreKeyId !== undefined && { signedPreKeyId: override.signedPreKeyId }),
+            }
+          : {
+              // Without an override the participant is in fan-out mode but has
+              // no per-device envelope (most likely: a recipient device that
+              // wasn't registered when the sender resolved the bundle list).
+              // We still ship the top-level envelope so legacy v0.9.x sends
+              // keep flowing; for v0.10.0 fan-out the top level is empty and
+              // the receiver renders the placeholder via decryptStoredMessage.
+              ...(message.encryptionVersion !== undefined && { encryptionVersion: message.encryptionVersion }),
+              ...(message.senderDeviceId !== undefined && { senderDeviceId: message.senderDeviceId }),
+              ...(message.recipientDeviceId !== undefined && { recipientDeviceId: message.recipientDeviceId }),
+              ...(message.preKeyId !== undefined && { preKeyId: message.preKeyId }),
+              ...(message.signedPreKeyId !== undefined && { signedPreKeyId: message.signedPreKeyId }),
+            }),
+      };
+
       send(participantConn.ws, ServerEvent.MESSAGE_NEW, newPayload);
+      if (hasFanout && process.env.NODE_ENV !== 'production') {
+        // eslint-disable-next-line no-console
+        console.info('[signalix-rt] fan-out delivery', {
+          messageId: message.id,
+          toUserId: participantId,
+          toDeviceId: participantConn.deviceId,
+          matchedOverride: !!override,
+          ciphertextLen: newPayload.ciphertext.length,
+        });
+      }
     }
   }
 }
@@ -402,30 +452,52 @@ async function onMessageEdit(
     sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
     return;
   }
-  if (!payload.ciphertext) {
+  // v0.10.0 — empty ciphertext is valid for group encrypted edits (body lives
+  // in recipients[]); reject only when both are missing.
+  const hasEditRecipients = Array.isArray(payload.recipients) && payload.recipients.length > 0;
+  if (!hasEditRecipients && !payload.ciphertext) {
     sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'ciphertext is required');
     return;
   }
 
   let result;
   try {
-    result = await api.editMessage(conn.accessToken, payload.messageId, payload.ciphertext);
+    result = await api.editMessage(conn.accessToken, payload.messageId, {
+      ciphertext: payload.ciphertext ?? '',
+      encryptionVersion: payload.encryptionVersion,
+      senderDeviceId: payload.senderDeviceId,
+      recipientDeviceId: payload.recipientDeviceId,
+      preKeyId: payload.preKeyId,
+      signedPreKeyId: payload.signedPreKeyId,
+      recipients: payload.recipients,
+    });
   } catch (err) {
     sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
     return;
   }
 
-  const broadcast: ServerMessageEditedPayload = {
-    messageId: result.messageId,
-    chatId: result.chatId,
-    ciphertext: result.ciphertext,
-    editedAt: result.editedAt,
-  };
-
-  // Broadcast to all participants (including sender's other devices; skip sending device)
+  // v0.10.0 — per-device fan-out broadcast for encrypted edits (direct +
+  // group). Same keying semantics as onMessageSend.
+  const editRecipientPayloads = result.recipientPayloads;
   for (const participantId of cm.getChatParticipants(payload.chatId)) {
     for (const participantConn of cm.getByUserId(participantId)) {
       if (participantConn.deviceId === conn.deviceId) continue;
+      const override = editRecipientPayloads?.[participantConn.deviceId];
+      const broadcast: ServerMessageEditedPayload = {
+        messageId: result.messageId,
+        chatId: result.chatId,
+        ciphertext: override?.ciphertext ?? result.ciphertext,
+        editedAt: result.editedAt,
+        ...(override
+          ? {
+              encryptionVersion: override.encryptionVersion,
+              ...(override.senderDeviceId !== undefined && { senderDeviceId: override.senderDeviceId }),
+              ...(override.recipientDeviceId !== undefined && { recipientDeviceId: override.recipientDeviceId }),
+              ...(override.preKeyId !== undefined && { preKeyId: override.preKeyId }),
+              ...(override.signedPreKeyId !== undefined && { signedPreKeyId: override.signedPreKeyId }),
+            }
+          : {}),
+      };
       send(participantConn.ws, ServerEvent.MESSAGE_EDITED, broadcast);
     }
   }
@@ -573,5 +645,59 @@ async function onPresenceUpdate(
     await api.updatePresence(conn.accessToken, status);
   } catch (err) {
     sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+  }
+}
+
+/**
+ * v0.10.2 — broadcast a newly-created chat to all of its participants.
+ *
+ * Triggered by the creating client right after the REST `POST /chats/group`
+ * (or any future "chat created via REST" endpoint) returns. The realtime
+ * server doesn't trust the client to ship the chat shape over the wire —
+ * instead it re-fetches the canonical `ChatDTO` via `GET /chats/:chatId`
+ * with the caller's JWT, which doubles as the participation check: the
+ * API throws FORBIDDEN if the caller isn't a participant, so a hostile
+ * client can't fan out a chat they don't actually belong to.
+ *
+ * Every connected participant (including the creator's own connections,
+ * minus the originating device) receives `server.chat.created`. The
+ * creating frontend deduplicates by `chat.id` since it already inserted
+ * the chat from the REST response.
+ */
+async function onChatCreated(
+  conn: Connection,
+  payload: Partial<ClientChatCreatedPayload>,
+): Promise<void> {
+  if (!payload?.chatId) {
+    sendError(conn.ws, ErrorCode.VALIDATION_ERROR, 'chatId is required');
+    return;
+  }
+
+  let result: { chat: import('@signalix/contracts').ChatDTO };
+  try {
+    result = await api.getChatById(conn.accessToken, payload.chatId);
+  } catch (err) {
+    // Most likely the caller isn't a participant (FORBIDDEN) or the
+    // chat was deleted between create + broadcast (NOT_FOUND). Surface
+    // the failure to the originator only; nothing to fan out.
+    sendError(conn.ws, ErrorCode.INTERNAL_ERROR, (err as Error).message);
+    return;
+  }
+
+  const { chat } = result;
+  const broadcast: ServerChatCreatedPayload = { chat };
+
+  // Seed the routing cache so subsequent MESSAGE_SEND broadcasts to this
+  // chat reach every participant without waiting for them to next call
+  // GET /chats. Mirrors what authenticated-connect preload does.
+  for (const participant of chat.participants) {
+    cm.learnChatParticipants(chat.id, participant.userId);
+  }
+
+  for (const participant of chat.participants) {
+    for (const participantConn of cm.getByUserId(participant.userId)) {
+      if (participantConn.deviceId === conn.deviceId) continue;
+      send(participantConn.ws, ServerEvent.CHAT_CREATED, broadcast);
+    }
   }
 }
