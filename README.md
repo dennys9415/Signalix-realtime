@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.12.0**
+**Version: v0.13.0**
 
 > v0.10.0 turns on **per-recipient broadcast** for group encrypted text messages. `event-router.onMessageSend` and `onMessageEdit` now read `recipientPayloads` off the API response and deliver each participant only their own ciphertext + envelope; non-recipients get the empty sentinel and render the failure placeholder. Direct E2EE flow is unchanged. The WS protocol is additive — `recipients?` is optional on `client.message.send` and `client.message.edit`; older clients keep working.
 
@@ -165,6 +165,11 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.13.0 changelog — Message search (realtime no-op)
+
+### Not changed
+- Search lives entirely in `Signalix-api` (SQL WHERE extension) and `Signalix-frontend` (client-side store walk + UI). The realtime layer has no role.
 
 ## v0.12.0 changelog — Safety number / device verification UI (realtime no-op)
 
