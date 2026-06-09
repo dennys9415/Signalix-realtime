@@ -1,6 +1,6 @@
 # Signalix Realtime
 
-**Version: v0.15.0**
+**Version: v0.16.0**
 
 > v0.10.0 turns on **per-recipient broadcast** for group encrypted text messages. `event-router.onMessageSend` and `onMessageEdit` now read `recipientPayloads` off the API response and deliver each participant only their own ciphertext + envelope; non-recipients get the empty sentinel and render the failure placeholder. Direct E2EE flow is unchanged. The WS protocol is additive — `recipients?` is optional on `client.message.send` and `client.message.edit`; older clients keep working.
 
@@ -165,6 +165,11 @@ docker build -f Signalix-realtime/Dockerfile -t signalix-realtime .
 ```
 
 Use `Signalix-infra` Docker Compose for local development — it handles build context, service dependencies, and shared `JWT_SECRET` automatically.
+
+## v0.16.0 changelog — Mobile foundation MVP (realtime no-op)
+
+### Not changed
+- v0.16.0 brings the new `Signalix-mobile` client (React Native + Expo SDK 54). The mobile WebSocket client reuses every existing event + payload — no new server events, no payload additions, no env var changes. WebSocket surface is byte-identical to v0.15.0.
 
 ## v0.15.0 changelog — Key backup & device recovery (realtime no-op)
 
