@@ -1,6 +1,6 @@
 {
   "name": "@signalix/realtime",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Signalix WebSocket realtime server",
   "private": true,
   "scripts": {
