@@ -31,9 +31,13 @@ src/
     event-router.ts       — per-socket event lifecycle and routing
   presence/
     presence.service.ts   — API calls + USER_ONLINE/USER_OFFLINE broadcasts
+  calls/
+    call.handlers.ts      — 1:1 call signaling (SDP/ICE relay, ringing, busy, 45s ring timeout,
+                            end-on-disconnect). In-memory sessions; call log persisted via API.
+                            Protocol: Signalix-contracts/protocol/call-flow.md
   common/
     api-client.ts         — typed HTTP calls to Signalix-api
-    ws-helpers.ts         — send() and parseMessage()
+    ws-helpers.ts         — send(), sendError() and parseMessage()
 ```
 
 ## Connection Lifecycle

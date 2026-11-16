@@ -1,6 +1,9 @@
 import { config } from '../config/config';
 import type {
   ApiResponse,
+  CallEndReason,
+  CallResponse,
+  CallType,
   ChatDTO,
   DeleteMessageForEveryoneResponse,
   EditMessageResponse,
@@ -169,3 +172,23 @@ export function removeReaction(
   );
 }
 
+// ── v0.17.0 — call log ───────────────────────────────────────────────────────
+
+export function createCall(
+  accessToken: string,
+  payload: { callId: string; chatId: string; callType: CallType },
+): Promise<CallResponse> {
+  return call<CallResponse>('POST', '/api/v1/calls', accessToken, payload);
+}
+
+export function acceptCall(accessToken: string, callId: string): Promise<CallResponse> {
+  return call<CallResponse>('POST', `/api/v1/calls/${callId}/accept`, accessToken);
+}
+
+export function endCall(
+  accessToken: string,
+  callId: string,
+  reason: CallEndReason,
+): Promise<CallResponse> {
+  return call<CallResponse>('POST', `/api/v1/calls/${callId}/end`, accessToken, { reason });
+}

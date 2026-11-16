@@ -8,6 +8,13 @@ import {
   PresenceStatus,
 } from '@signalix/contracts';
 import type {
+  ClientCallAcceptPayload,
+  ClientCallHangupPayload,
+  ClientCallIceCandidatePayload,
+  ClientCallInvitePayload,
+  ClientCallMediaUpdatePayload,
+  ClientCallRejectPayload,
+  ClientCallRingingPayload,
   ClientChatCreatedPayload,
   ClientMessageDeleteForEveryonePayload,
   ClientMessageEditPayload,
@@ -24,7 +31,6 @@ import type {
   TypingPayload,
   WsAuthenticatePayload,
   WsAuthenticatedPayload,
-  WsErrorPayload,
   WsHeartbeatPayload,
 } from '@signalix/contracts';
 import { verifyAccessToken } from '../auth/jwt';
@@ -32,22 +38,14 @@ import * as cm from './connection-manager';
 import type { Connection } from './connection-manager';
 import * as api from '../common/api-client';
 import * as presence from '../presence/presence.service';
-import { send, parseMessage } from '../common/ws-helpers';
+import { send, sendError, parseMessage } from '../common/ws-helpers';
+import * as calls from '../calls/call.handlers';
 
 const AUTH_TIMEOUT_MS = 30_000;
 const TYPING_EXPIRE_MS = 5_000;
 
 // Key: `${userId}:${chatId}` — auto-fires server.typing.stop when client misses the stop event
 const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function sendError(ws: WebSocket, code: ErrorCode, message: string): void {
-  const payload: WsErrorPayload = {
-    code,
-    message,
-    timestamp: new Date().toISOString(),
-  };
-  send(ws, ServerEvent.ERROR, payload);
-}
 
 export function handleConnection(ws: WebSocket): void {
   let conn: Connection | null = null;
@@ -156,6 +154,7 @@ async function initConnection(conn: Connection): Promise<void> {
 
 async function onDisconnect(conn: Connection): Promise<void> {
   cm.removeConnection(conn.deviceId);
+  calls.onDeviceDisconnected(conn);
   await presence.onUserOffline(conn);
   console.log(`[ws] Disconnected user=${conn.userId} device=${conn.deviceId}`);
 }
@@ -205,6 +204,28 @@ async function routeEvent(conn: Connection, event: string, payload: unknown): Pr
       break;
     case ClientEvent.CHAT_CREATED:
       await onChatCreated(conn, payload as Partial<ClientChatCreatedPayload>);
+      break;
+    // v0.17.0 — 1:1 call signaling
+    case ClientEvent.CALL_INVITE:
+      await calls.onCallInvite(conn, payload as Partial<ClientCallInvitePayload>);
+      break;
+    case ClientEvent.CALL_RINGING:
+      calls.onCallRinging(conn, payload as Partial<ClientCallRingingPayload>);
+      break;
+    case ClientEvent.CALL_ACCEPT:
+      await calls.onCallAccept(conn, payload as Partial<ClientCallAcceptPayload>);
+      break;
+    case ClientEvent.CALL_REJECT:
+      calls.onCallReject(conn, payload as Partial<ClientCallRejectPayload>);
+      break;
+    case ClientEvent.CALL_HANGUP:
+      calls.onCallHangup(conn, payload as Partial<ClientCallHangupPayload>);
+      break;
+    case ClientEvent.CALL_ICE_CANDIDATE:
+      calls.onCallIceCandidate(conn, payload as Partial<ClientCallIceCandidatePayload>);
+      break;
+    case ClientEvent.CALL_MEDIA_UPDATE:
+      calls.onCallMediaUpdate(conn, payload as Partial<ClientCallMediaUpdatePayload>);
       break;
     default:
       sendError(conn.ws, ErrorCode.WS_INVALID_EVENT, `Unknown event: ${event}`);

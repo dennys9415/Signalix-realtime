@@ -50,6 +50,10 @@ export function getByUserId(userId: string): Set<Connection> {
   return byUserId.get(userId) ?? new Set();
 }
 
+export function getByDeviceId(deviceId: string): Connection | undefined {
+  return byDeviceId.get(deviceId);
+}
+
 export function isUserOnline(userId: string): boolean {
   return (byUserId.get(userId)?.size ?? 0) > 0;
 }
